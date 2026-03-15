@@ -7,10 +7,10 @@ import time
 
 from networkx.utils.decorators import np_random_state
 
-from DRBSDE import fbsde
-from DRBSDE import BSDEiter
-from DRBSDE import Model
-from DRBSDE import Result
+from RBSDE import fbsde
+from RBSDE import BSDEiter
+from RBSDE import Model
+from RBSDE import Result
 
 
 
@@ -18,7 +18,7 @@ path = "state_dicts/"
 
 
 new_folder_flag = True
-new_folder = "MultiCfD/"
+new_folder = "Robust_test/"
 
 if new_folder_flag:
     path = new_folder + path
@@ -36,25 +36,25 @@ print(device)
 
 
 mode = "Training"
-#mode = "Testing"
+mode = "Testing"
 #ht_analysis = True
 ht_analysis=False
 
 
 def b(t, x):
-    # x: shape [batch_size, dim_x]
-    mu_t = torch.tensor(mu, device = device)
-    kappa_t = torch.tensor(kappa, device = device)
-    drift = kappa_t*(mu_t - x)
+    #  shape [batch_size, dim_x]
+    #mu_t = torch.tensor(mu, device = device)
+    #kappa_t = torch.tensor(kappa, device = device)
+    #drift = kappa_t*(mu_t - x)
     # X: OU process
 
-    return drift
+    return torch.zeros_like(x)
 
 def sigma(t, x):
-    # x: shape [batch_size, dim_x, dim_d]
-    sig_t = torch.tensor(sig, device = device)
-    diag_matrix = torch.diag_embed(sig_t).unsqueeze(0).repeat(batch_size, 1, 1)
-    return diag_matrix
+    #  shape [batch_size, dim_x, dim_d]
+    #sig_t = torch.tensor(sig, device = device)
+    #diag_matrix = torch.diag_embed(sig_t).unsqueeze(0).repeat(batch_size, 1, 1)
+    return torch.ones(batch_size, dim_x, dim_x, device = device)
 
 
 
@@ -63,36 +63,39 @@ def sigma(t, x):
 def f(t, x, y, z):
     #CfD
     #c_0 = torch.ones(dim_x, device = device )*np.exp(x0_value)
-    value = (strike_t+  - x) * np.exp(-rho * t)
+    #value = (strike_t+  - x) * np.exp(-rho * t)
 
     #Benchmark example
     #c_0 = torch.zeros(dim_x, device = device)
     #value = 10*(c_0 - x)* np.exp(-rho * t)
     #output: [batch_size, dim_y]
-    return torch.mean(value, dim=-1, keepdim=True)
+    #return torch.mean(value, dim=-1, keepdim=True)
     #return value1
-
+    r = torch.zeros_like(y)
+    R = torch.ones_like(y)*0.5
+    beta = R*(y<0) + r*(y>=0)
+    return beta*y
 
 
 def g(x):
-    return 0*torch.ones(x.shape[0], dim_y, device = device)
+    return x
 
 
 
 def lower_barrier(t,x):  #lower barrier = when player 2 stops
-    return torch.ones(batch_size, dim_y, device=device)*(-l)*np.exp(- rho*t)
+    return x
     #return torch.ones(batch_size, dim_y) * (-2) * np.exp(- rho * t)
 
 
 def upper_barrier(t,x): #upper barrier = when player 1 stops
-    return torch.ones(batch_size, dim_y, device=device)*(u)*np.exp(-rho*t)
+    return torch.ones(batch_size, dim_y, device=device)*(u)*100
     #return torch.ones(batch_size, dim_y) * (2) * np.exp(-rho * t)
 
 
 
 if mode == "Training":
 
-    dim_x, dim_y, dim_d, dim_h, N, itr, batch_size = 20, 1, 20, 100, 50, 100, 2 ** 10
+    dim_x, dim_y, dim_d, dim_h, N, itr, batch_size = 1, 1, 1, 50, 50, 100, 2 ** 10
     multiplier = 5
 
     ###################################
@@ -154,7 +157,8 @@ if mode == "Training":
     x_0 = torch.ones(dim_x)*x0_value
     '''
 
-
+    x0_value = 0
+    #x_0 = torch.ones(dim_x) * x0_value
 
     #params = pd.read_csv('Calibration/calibrated_parameters.csv')
 
@@ -162,31 +166,9 @@ if mode == "Training":
     #mu = params["mu"].values.tolist()
     #sig = params["sigma"].values.tolist()
 
-    kappa, mu, sig, x0_value = [], [], [], []
-
-    with open('Calibration/calibrated_parameters.csv', 'r') as p:
-        reader = csv.DictReader(p)
-        for row in reader:
-            kappa.append(float(row['kappa']))
-            mu.append(float(row['mu']))
-            sig.append(float(row['sigma']))
-            x0_value.append(float(row['x0']))
-
-
-    dim_x = len(kappa)
-    dim_d = dim_x
-
-    strike = mu + np.random.random(dim_x) * 0.2 + 0.9
-    strike_t = torch.tensor(strike, device=device)
-    strike = strike.tolist()
 
 
 
-
-    c_0 = np.exp(x0_value)
-        # c_0 = x0_value
-
-    rho = 0.04
     T = 1
     u = 1.20  # upper barrier
     l = 0.1  # lower barrier
@@ -202,11 +184,6 @@ if mode == "Training":
         "batch_size": batch_size,
         "multiplier": multiplier,
         "x0_value": x0_value,
-        "kappa": kappa,
-        "mu": mu,
-        "sig": sig,
-        "rho": rho,
-        "K": strike,
         "T": T,
         "u": u,
         "l": l,
@@ -229,7 +206,7 @@ if mode == "Training":
     Y0=[]
     f1 = []
     f2 = []
-    for i in range(2):
+    for i in range(1):
         print(f"iteration n {i}")
 
         start_time = time.time()
@@ -263,11 +240,9 @@ else:
 
     x0_value = loaded_params["x0_value"]
 
-    kappa = loaded_params["kappa"]
-    mu = loaded_params["mu"]
-    sig = loaded_params["sig"]
 
-    rho = loaded_params["rho"]
+
+
     T = loaded_params["T"]
     u = loaded_params["u"]
     l = loaded_params["l"]
@@ -379,12 +354,13 @@ else:
     k = np.random.randint(batch_size)
     fig, ax = plt.subplots(1, 1, figsize=(8, 6))
     colors = ['red', 'blue']
-    for i in range(20):
-        ax.plot(t, y[i, 0, :].detach().numpy(), color="red", linestyle='-', label=f"Y realization {i}")
+
+
+    ax.plot(t, y[j, 0, :].detach().numpy(), color="red", linestyle='-', label=f"Y realization {1}")
 
     # Plot upper and lower barriers (use j from np.random if you want consistency)
-    ax.plot(t, upper_np[j, :], color="black", linestyle='--', label="Upper barrier")
-    ax.plot(t, lower_np[j, :], color="green", linestyle='--', label="Lower barrier")
+    #ax.plot(t, upper_np[j, :], color="black", #linestyle='--', label="Upper barrier")
+    ax.plot(t, lower_np[j,0, :], color="green", linestyle='--', label="Lower barrier")
     # Add legend and title
     #ax.legend(loc="upper right")
     plt.tight_layout()
@@ -610,7 +586,7 @@ plt.show()
 
 
 j = np.random.randint(batch_size)
-plt.plot(t, y[j, 0, :].detach().numpy(), color="red", label="DRBSDE")
+plt.plot(t, y[j, 0, :].detach().numpy(), color="red", label="RBSDE")
 #plt.plot(t,ytrue[j,0,:], color="blue", label="Analytical")
 
 plt.plot(t, l2_vals[:, 0], color="green", linestyle="dotted", label= r'f_2(t,X_t)')
@@ -723,12 +699,12 @@ axes[0].set_ylabel("Electricity Price \( P_t \)")
 axes[0].legend()
 axes[0].grid()
 
-axes[1].plot(t, y[j, 0, :].detach().numpy(), color="red", label="DRBSDE")
+axes[1].plot(t, y[j, 0, :].detach().numpy(), color="red", label="RBSDE")
 axes[1].plot(t, l2_vals[:, 0], color="green", linestyle="dashed", label=r'$f_2(t,X_t)$')
 axes[1].plot(t, l1_vals[:, 0], color="purple", linestyle="dotted", label=r'$f_1(t,X_t)$')
     # axes[1].plot(t, ytrue[j, 0, :], color="blue", label="Analytical")
 
-axes[1].set_title("DRBSDE and Boundaries")
+axes[1].set_title("RBSDE and Boundaries")
 axes[1].set_xlabel("Time")
 axes[1].set_ylabel("Value Function / Boundaries")
 axes[1].legend(loc="lower right")
