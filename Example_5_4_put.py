@@ -39,8 +39,12 @@ LOWER_SENTINEL = -1e6
 
 def run(gamma_bar, delta_bar, out_dir, S0=1.0, K=1.1, sigma_S=0.2, r=0.05,
         seed=0, N=50, itr=100, dim_h=50, batch_size=2 ** 10, multiplier=5,
-        T=1.0, diagnose=True):
-    """Train §5.4 for entropic radius gamma_bar and worst-case discount delta_bar."""
+        T=1.0, diagnose=True, xi_override=None):
+    """Train §5.4 for entropic radius gamma_bar and worst-case discount delta_bar.
+
+    xi_override(t, x): optional obstacle replacing the default put payoff
+    (used by the property checks to feed shifted / alternate-strike obstacles).
+    """
     torch.manual_seed(seed)
     np.random.seed(seed)
 
@@ -56,8 +60,11 @@ def run(gamma_bar, delta_bar, out_dir, S0=1.0, K=1.1, sigma_S=0.2, r=0.05,
     def sigma(t, x):
         return torch.full((x.size(0), dim_x, dim_x), sigma_S, device=x.device)
 
-    def xi(t, x):
-        return torch.clamp(K - torch.exp(x), min=0.0)
+    if xi_override is None:
+        def xi(t, x):
+            return torch.clamp(K - torch.exp(x), min=0.0)
+    else:
+        xi = xi_override
 
     def f(t, x, y, z):
         # g(t, y, z) = (gamma_bar/2)|z|^2 - delta_bar y    (paper §5.4, linear in y)

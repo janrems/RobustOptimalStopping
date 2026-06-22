@@ -41,8 +41,13 @@ LOWER_SENTINEL = -1e6
 
 
 def run(beta_lo, beta_hi, out_dir, seed=0, N=50, itr=100, dim_h=50,
-        batch_size=2 ** 10, multiplier=5, T=1.0, x0_value=0.0, diagnose=True):
-    """Train §5.1 for a discount band [beta_lo, beta_hi]; return summary dict."""
+        batch_size=2 ** 10, multiplier=5, T=1.0, x0_value=0.0, diagnose=True,
+        xi_override=None):
+    """Train §5.1 for a discount band [beta_lo, beta_hi]; return summary dict.
+
+    xi_override(t, x): optional obstacle replacing the default xi_t = X_t
+    (used by the property checks to feed shifted / alternate obstacles).
+    """
     torch.manual_seed(seed)
     np.random.seed(seed)
 
@@ -58,9 +63,12 @@ def run(beta_lo, beta_hi, out_dir, seed=0, N=50, itr=100, dim_h=50,
     def sigma(t, x):
         return torch.ones(x.size(0), dim_x, dim_x, device=x.device)
 
-    def xi(t, x):
-        # sign-changing obstacle process xi_t = X_t
-        return x
+    if xi_override is None:
+        def xi(t, x):
+            # sign-changing obstacle process xi_t = X_t
+            return x
+    else:
+        xi = xi_override
 
     def f(t, x, y, z):
         # g(t, y, z) = sup_beta {-beta y} = max(-beta_lo y, -beta_hi y); no z-term
