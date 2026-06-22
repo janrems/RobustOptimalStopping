@@ -20,6 +20,10 @@ env/
 Robust_test/
 Test_Dynkin*/
 state_dicts/
+Example_*/
+
+# Reference papers
+Papers/
 
 # Output files
 *.npy
