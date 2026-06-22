@@ -1,0 +1,30 @@
+[project]
+name = "robust-optimal-stopping"
+version = "0.1.0"
+description = "Deep reflected-BSDE solver for robust optimal stopping under ambiguity"
+requires-python = ">=3.12"
+dependencies = [
+    "torch",
+    "numpy",
+    "matplotlib",
+    "pandas",
+    "networkx",
+]
+
+# torch: pull the CPU-only wheel (no GPU on this machine), pinned + reproducible
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[dependency-groups]
+dev = ["ruff", "pytest"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+extend-select = ["I"]  # import sorting
