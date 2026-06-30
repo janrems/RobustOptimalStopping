@@ -37,8 +37,8 @@ print(device)
 
 mode = "Training"
 mode = "Testing"
-#ht_analysis = True
-ht_analysis=False
+ht_analysis = True
+#ht_analysis=False
 
 
 def b(t, x):
@@ -74,7 +74,7 @@ def f(t, x, y, z):
     r = torch.zeros_like(y)
     R = torch.ones_like(y)*0.5
     beta = R*(y<0) + r*(y>=0)
-    return beta*y
+    return -beta*y
 
 
 def g(x):
