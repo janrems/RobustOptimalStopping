@@ -110,7 +110,7 @@ class BSDEsolver():
             #x_next = torch.exp(x_next)
         else:
             for i in range(n):
-                w = torch.randn(batch_size, self.equation.dim_x, 1, device=device)*np.sqrt(delta_t)
+                w = torch.randn(batch_size, self.equation.dim_d, 1, device=device)*np.sqrt(delta_t)
                 x = x + (self.equation.b(delta_t * (i), x)) * delta_t + torch.matmul(self.equation.sigma(delta_t * (i), x),w).reshape(-1, self.equation.dim_x)
             w = torch.randn(batch_size, self.equation.dim_d, 1, device=device)*np.sqrt(delta_t)
             x_next = x + (self.equation.b(delta_t * (n), x)) * delta_t + torch.matmul(self.equation.sigma(delta_t * (n), x),w).reshape(-1, self.equation.dim_x)

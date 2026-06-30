@@ -38,7 +38,7 @@ LOWER_SENTINEL = -1e6
 
 
 def run(gamma_bar, delta_bar, out_dir, S0=1.0, K=1.1, sigma_S=0.2, r=0.05,
-        seed=0, N=50, itr=100, dim_h=50, batch_size=2 ** 10, multiplier=5,
+        seed=0, N=50, itr=300, dim_h=50, batch_size=2 ** 10, multiplier=10,
         T=1.0, diagnose=True, xi_override=None):
     """Train §5.4 for entropic radius gamma_bar and worst-case discount delta_bar.
 
@@ -110,14 +110,14 @@ def run(gamma_bar, delta_bar, out_dir, S0=1.0, K=1.1, sigma_S=0.2, r=0.05,
                "time_value": -Y0 - intrinsic, "seed": seed}
     if diagnose:
         summary.update(_diagnose(equation, dim_h, path, graph_path, batch_size,
-                                 N, T, upper_barrier, K, S0))
+                                 N, T, upper_barrier, K, S0, loss))
     with open(out_dir + "summary.json", "w") as p:
         json.dump(summary, p, indent=2)
     return summary
 
 
 def _diagnose(equation, dim_h, path, graph_path, batch_size, N, T,
-              upper_barrier, K, S0):
+              upper_barrier, K, S0, loss):
     model = Model(equation, dim_h)
     model.eval()
     result = Result(model, equation)
@@ -131,39 +131,31 @@ def _diagnose(equation, dim_h, path, graph_path, batch_size, N, T,
     y, z = result.predict(N, batch_size, x, path)
 
     t = torch.linspace(0, T, N)
-    x_np = x.detach().cpu().numpy()
     y_np = y.detach().cpu().numpy()
+    z_np = z.detach().cpu().numpy()
     upper_np = upper_barrier(t, x).detach().cpu().numpy()
-    S_np = np.exp(x_np)
 
-    # ---- stock + Y trajectories
+    # ---- Y vs obstacle (left) + control process Z (right)
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    for j in np.random.choice(batch_size, size=3, replace=False):
-        axes[0].plot(t, S_np[j, 0, :], label=f"S (sample {j})")
-        axes[1].plot(t, y_np[j, 0, :], label=f"Y (sample {j})")
-        axes[1].plot(t, upper_np[j, 0, :], "--", alpha=0.5, label=f"-xi (sample {j})")
-    axes[0].axhline(K, color="k", linestyle=":", alpha=0.6, label=f"K = {K}")
-    axes[0].set_title(r"Stock price $S_t = e^{X_t}$")
-    axes[0].set_xlabel("t"); axes[0].grid(True); axes[0].legend(fontsize=8)
-    axes[1].set_title(r"$Y_t$ and upper obstacle $-\xi_t$")
-    axes[1].set_xlabel("t"); axes[1].grid(True); axes[1].legend(fontsize=7)
+    sample_js = np.random.choice(batch_size, size=3, replace=False)
+    t_z = t[:-1]
+    for j in sample_js:
+        axes[0].plot(t, y_np[j, 0, :], label=f"$Y$ (sample {j})")
+        axes[0].plot(t, upper_np[j, 0, :], "--", alpha=0.5,
+                     label=rf"$-\xi$ (sample {j})")
+        axes[1].plot(t_z, z_np[j, 0, 0, :-1], label=f"$Z$ (sample {j})")
+    axes[0].set_title(r"$Y_t$ and upper obstacle $-\xi_t$")
+    axes[0].set_xlabel("t"); axes[0].grid(True); axes[0].legend(fontsize=7)
+    axes[1].set_title(r"Control process $Z_t$")
+    axes[1].set_xlabel("t"); axes[1].grid(True); axes[1].legend(fontsize=8)
     plt.tight_layout()
     plt.savefig(graph_path + "Y_trajectories.png")
     plt.close()
 
-    # ---- obstacle adherence: max_i (Y + xi)^+ should be ~ 0
-    viol = np.maximum(y_np[:, 0, :] - upper_np[:, 0, :], 0.0).max(axis=1)
-    plt.figure(figsize=(8, 5))
-    plt.hist(viol, bins=30, alpha=0.7)
-    plt.xlabel(r"pathwise $\max_i (Y_{t_i} + \xi_{t_i})^+$")
-    plt.ylabel("count")
-    plt.title("Upper-obstacle violation (≈0 means constraint respected)")
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(graph_path + "obstacle_violation.png")
-    plt.close()
+    # silent QC: max upper-obstacle violation (printed only)
+    max_viol = float(np.maximum(y_np[:, 0, :] - upper_np[:, 0, :], 0.0).max())
 
-    # ---- stopping times
+    # ---- stopping times histogram
     tol = 1e-3
     exit_idx = []
     for j in range(batch_size):
@@ -176,15 +168,36 @@ def _diagnose(equation, dim_h, path, graph_path, batch_size, N, T,
     plt.figure(figsize=(8, 5))
     if stopped_early.any():
         plt.hist(exit_times[stopped_early], bins=20, alpha=0.7)
+        plt.axvline(exit_times[stopped_early].mean(), color="red",
+                    linestyle="--", lw=1.2,
+                    label=f"mean {exit_times[stopped_early].mean():.3f}")
+        plt.legend()
     plt.xlabel(r"$\tau^*$"); plt.ylabel("count")
-    plt.title("Early optimal stopping times")
+    plt.title(rf"Distribution of optimal stopping times "
+              rf"(early-stop frac {stopped_early.mean():.2f})")
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig(graph_path + "exit_times.png")
+    plt.savefig(graph_path + "stopping_times.png")
+    plt.close()
+
+    # ---- training loss at terminal step (n = N-2)
+    plt.figure(figsize=(8, 5))
+    if loss and len(loss) > 0:
+        plt.plot(loss[0], lw=0.7, color="C0")
+        tail = loss[0][max(0, int(0.9 * len(loss[0]))):]
+        if tail:
+            plt.axhline(float(np.mean(tail)), color="red", linestyle="--",
+                        lw=1.0, alpha=0.6, label="final 10% mean")
+            plt.legend()
+    plt.yscale("log")
+    plt.xlabel("iteration"); plt.ylabel("loss")
+    plt.title("Training loss at terminal step (n = N-2)")
+    plt.grid(True, which="both", alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(graph_path + "loss.png")
     plt.close()
 
     mean_tau = float(exit_times[stopped_early].mean()) if stopped_early.any() else None
-    max_viol = float(viol.max())
     print(f"      max obstacle violation: {max_viol:.2e}")
     print(f"      fraction stopping early: {stopped_early.mean():.3f}")
 
@@ -196,5 +209,5 @@ def _diagnose(equation, dim_h, path, graph_path, batch_size, N, T,
 
 
 if __name__ == "__main__":
-    # default: entropic radius 0.1, worst-case discount = risk-free rate
-    run(gamma_bar=0.1, delta_bar=0.05, out_dir="Example_5_4_put/")
+    # default: entropic radius 5.0, worst-case discount = risk-free rate
+    run(gamma_bar=5.0, delta_bar=0.05, out_dir="Example_5_4_put/")
