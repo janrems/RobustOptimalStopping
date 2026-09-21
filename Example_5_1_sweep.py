@@ -44,34 +44,53 @@ def main():
     print(f"[5.1 sweep] wrote {OUT}summary.csv and sweep.png")
 
 
-def _agg(rows, key):
+def _agg_paired(rows, key):
+    """Per-seed differences from the beta_hi = 0 baseline, then aggregate.
+
+    The seed effect is a common offset on the level of Y0, and across the band
+    it is larger than the trend itself, so unpaired error bars hide the effect.
+    Pairing within each seed cancels that offset; the error bars below therefore
+    measure variation of the *effect*, not of the level.
+    """
     grid = sorted({r["beta_hi"] for r in rows})
-    mean, std = [], []
-    for b in grid:
-        vals = [r[key] for r in rows if r["beta_hi"] == b and r[key] is not None]
-        mean.append(np.mean(vals) if vals else np.nan)
-        std.append(np.std(vals) if vals else np.nan)
-    return np.array(grid), np.array(mean), np.array(std)
+    base = {r["rep"]: r[key] for r in rows if r["beta_hi"] == grid[0]}
+    curves = {}
+    for rep in sorted({r["rep"] for r in rows}):
+        if base.get(rep) is None:
+            continue
+        vals = []
+        for b in grid:
+            v = next((r[key] for r in rows
+                      if r["beta_hi"] == b and r["rep"] == rep), None)
+            vals.append(np.nan if v is None else v - base[rep])
+        curves[rep] = np.array(vals, dtype=float)
+    stack = np.array(list(curves.values()))
+    return np.array(grid), np.nanmean(stack, 0), np.nanstd(stack, 0), curves
 
 
 def _plot(rows):
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    g, m, s = _agg(rows, "Y0")
-    axes[0].errorbar(g, m, yerr=s, marker="o", capsize=3)
-    axes[0].set_xlabel(r"band width $\bar\beta$ (band $[0,\bar\beta]$)")
-    axes[0].set_ylabel(r"$Y_0$")
-    axes[0].set_title(r"Conservative value vs discount-band width")
-    axes[0].grid(True)
-
-    g, m, s = _agg(rows, "mean_tau")
-    axes[1].errorbar(g, m, yerr=s, marker="o", capsize=3, color="C1")
-    axes[1].set_xlabel(r"band width $\bar\beta$")
-    axes[1].set_ylabel(r"mean $\tau^*$ (early stops)")
-    axes[1].set_title("Stopping vs discount-band width")
-    axes[1].grid(True)
-
+    panels = (
+        (axes[0], "Y0", "C0", r"$Y_0(\bar\beta) - Y_0(0)$",
+         "Conservative value vs discount-band width"),
+        (axes[1], "mean_tau", "C1",
+         r"mean $\tau^*(\bar\beta) - $ mean $\tau^*(0)$",
+         "Stopping vs discount-band width"),
+    )
+    for ax, key, col, ylab, title in panels:
+        g, m, sd, curves = _agg_paired(rows, key)
+        for c in curves.values():
+            ax.plot(g, c, color="0.75", lw=0.8, marker=".", ms=4, zorder=1)
+        ax.errorbar(g, m, yerr=sd, marker="o", capsize=3, lw=1.6, color=col,
+                    zorder=2, label=r"mean $\pm$ s.d. (paired)")
+        ax.axhline(0.0, color="k", lw=0.8, alpha=0.5)
+        ax.set_xlabel(r"band width $\bar\beta$ (band $[0,\bar\beta]$)")
+        ax.set_ylabel(ylab)
+        ax.set_title(title)
+        ax.grid(True)
+        ax.legend(fontsize=8)
     plt.tight_layout()
-    plt.savefig(OUT + "sweep.png")
+    plt.savefig(OUT + "sweep.png", dpi=150)
     plt.close()
 
 

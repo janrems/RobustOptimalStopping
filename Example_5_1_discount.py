@@ -9,10 +9,15 @@ the probability measure is fixed. The reflected-BSDE driver is
                = max(-beta_lo * y, -beta_hi * y).
 
 No z-term: pure discount ambiguity. Both band endpoints act only if Y changes
-sign, so we use a SIGN-CHANGING payoff (xi_t = X_t, dX_t = dW_t). Then beta_hi
-discounts the liability side (y < 0) and beta_lo the asset side (y >= 0); that
-asymmetry is the cash-subadditivity §5.1 is about. A nonnegative payoff would
-pin Y <= 0 and collapse the band to beta_hi (see §5.4 / the put).
+sign, so we use a BOUNDED SIGN-CHANGING collar obstacle
+
+    xi_t = Phi_c(X_t) = c * tanh(X_t / c),    dX_t = dW_t,
+
+with c = 1. The collar is bounded (|xi| <= c), which the convergence theory
+requires, while still sign-changing. Then beta_hi discounts the liability side
+(y < 0) and beta_lo the asset side (y >= 0); that asymmetry is the
+cash-subadditivity §5.1 is about. A nonnegative payoff would pin Y <= 0 and
+collapse the band to beta_hi (see §5.4 / the put).
 
 Upper-reflected BSDE:
     Y_t = -xi_T + int_t^T g(s, Y_s, Z_s) ds - int_t^T Z_s dW_s - (K_T - K_t),
@@ -41,11 +46,12 @@ LOWER_SENTINEL = -1e6
 
 
 def run(beta_lo, beta_hi, out_dir, seed=0, N=50, itr=300, dim_h=50,
-        batch_size=2 ** 10, multiplier=10, T=1.0, x0_value=0.0, diagnose=True,
-        xi_override=None):
+        batch_size=2 ** 10, multiplier=10, T=1.0, c=1.0, x0_value=0.0,
+        diagnose=True, xi_override=None):
     """Train §5.1 for a discount band [beta_lo, beta_hi]; return summary dict.
 
-    xi_override(t, x): optional obstacle replacing the default xi_t = X_t
+    c: collar level of the default obstacle xi_t = c * tanh(X_t / c).
+    xi_override(t, x): optional obstacle replacing the default collar
     (used by the property checks to feed shifted / alternate obstacles).
     """
     torch.manual_seed(seed)
@@ -65,8 +71,8 @@ def run(beta_lo, beta_hi, out_dir, seed=0, N=50, itr=300, dim_h=50,
 
     if xi_override is None:
         def xi(t, x):
-            # sign-changing obstacle process xi_t = X_t
-            return x
+            # bounded sign-changing collar obstacle xi_t = c * tanh(X_t / c)
+            return c * torch.tanh(x / c)
     else:
         xi = xi_override
 
@@ -89,7 +95,7 @@ def run(beta_lo, beta_hi, out_dir, seed=0, N=50, itr=300, dim_h=50,
 
     params = dict(dim_x=dim_x, dim_y=dim_y, dim_d=dim_d, dim_h=dim_h, N=N,
                   itr=itr, batch_size=batch_size, multiplier=multiplier,
-                  x0_value=x0_value, T=T, beta_lo=beta_lo, beta_hi=beta_hi,
+                  x0_value=x0_value, T=T, c=c, beta_lo=beta_lo, beta_hi=beta_hi,
                   seed=seed)
     with open(os.path.join(path, "params.json"), "w") as h:
         json.dump(params, h, indent=2)
@@ -147,7 +153,7 @@ def _diagnose(equation, dim_h, path, graph_path, batch_size, N, T,
                      label=rf"$-\xi$ (sample {j})")
         axes[1].plot(t_z, z_np[j, 0, 0, :-1], label=f"$Z$ (sample {j})")
     axes[0].axhline(0.0, color="k", lw=0.8, alpha=0.6)
-    axes[0].set_title(r"$Y_t$ and upper obstacle $-\xi_t = -X_t$")
+    axes[0].set_title(r"$Y_t$ and upper obstacle $-\xi_t = -c\,\tanh(X_t/c)$")
     axes[0].set_xlabel("t"); axes[0].grid(True); axes[0].legend(fontsize=8)
     axes[1].set_title(r"Control process $Z_t$")
     axes[1].set_xlabel("t"); axes[1].grid(True); axes[1].legend(fontsize=8)

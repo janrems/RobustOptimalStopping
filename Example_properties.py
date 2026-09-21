@@ -96,13 +96,14 @@ def obstacles_BS(K=1.1, K2=0.9):
     }
 
 
-def obstacles_51():
-    """Sign-changing Brownian payoff + variants."""
+def obstacles_51(c=1.0):
+    """Bounded sign-changing collar payoff + variants."""
+    coll = lambda u: c * torch.tanh(u / c)
     return {
-        "base":  lambda t, x: x,
-        "shift": lambda t, x: x + M_SHIFT,
-        "conv2": lambda t, x: x ** 2 - 0.5,                  # curved, sign-changing
-        "mix":   lambda t, x: 0.5 * (x + (x ** 2 - 0.5)),
+        "base":  lambda t, x: coll(x),
+        "shift": lambda t, x: coll(x) + M_SHIFT,
+        "conv2": lambda t, x: coll(x ** 2 - 0.5),            # curved, sign-changing
+        "mix":   lambda t, x: 0.5 * (coll(x) + coll(x ** 2 - 0.5)),
     }
 
 

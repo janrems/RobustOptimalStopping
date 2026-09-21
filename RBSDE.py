@@ -124,7 +124,7 @@ class BSDEsolver():
 
         if n != N-2:
             mod2 = Model(self.equation, self.dim_h).to(device)
-            mod2.load_state_dict(torch.load(path + "state_dict_" + str(n + 1)), strict=False)
+            mod2.load_state_dict(torch.load(path + "state_dict_" + str(n + 1)))
             mod2.eval()
 
         if n >= N-3:
@@ -193,7 +193,7 @@ class BSDEiter():
             bsde_solver = BSDEsolver(self.equation, self.dim_h, mod, lr, coeff)
             if n != N-2:
                 #break
-                bsde_solver.model.load_state_dict(torch.load(path+"state_dict_" + str(n+1)), strict=False)
+                bsde_solver.model.load_state_dict(torch.load(path+"state_dict_" + str(n+1)))
                 bsde_solver.optimizer.load_state_dict(torch.load(path + "state_dict_opt_" + str(n + 1)))
 
             loss_n, y = bsde_solver.train(batch_size, N, n, itr, path, multiplyer)
@@ -250,7 +250,7 @@ class Result():
 
 
         for n in range(N-1):
-            self.model.load_state_dict(torch.load(path + "state_dict_" + str(n),map_location=torch.device('cpu')), strict=False)
+            self.model.load_state_dict(torch.load(path + "state_dict_" + str(n),map_location=torch.device('cpu')))
             y,z = self.model(N, n, x[:,:,n])
             if 0==0:
                 #y = torch.maximum(y,self.equation.l(x[:,:,n]))
