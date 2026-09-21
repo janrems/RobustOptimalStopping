@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import json
 import numpy as np
 #from collections import deque
 
@@ -83,7 +84,8 @@ class BSDEsolver():
     def __init__(self, equation, dim_h, model,lr,coeff):
         self.model = model
         self.equation = equation
-        self.optimizer = torch.optim.Adam(self.model.parameters(),lr*coeff)
+        self.base_lr = lr*coeff
+        self.optimizer = torch.optim.Adam(self.model.parameters(),self.base_lr)
         self.dim_h = dim_h
 
     def loss(self, x, n, y_prev, y, z, w, N):
@@ -120,6 +122,7 @@ class BSDEsolver():
 
     def train(self, batch_size, N, n, itr, path, multiplyer):
         loss_n = []
+        y_n = []
         delta_t = self.equation.T / N
 
         if n != N-2:
@@ -131,6 +134,12 @@ class BSDEsolver():
             itr_actual = multiplyer*itr
         else:
             itr_actual = itr
+
+        # a warm-started optimizer carries the previous step's decayed lr; reset it
+        for g in self.optimizer.param_groups:
+            g["lr"] = self.base_lr
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer, T_max=itr_actual, eta_min=self.base_lr*1e-2)
 
         for i in range(itr_actual):
             if i % 200 == 0:
@@ -161,9 +170,11 @@ class BSDEsolver():
             loss = self.loss(x,n,y_prev,y,z,w,N)
 
             self.optimizer.zero_grad()
-            loss.backward(retain_graph=True)
+            loss.backward()
             self.optimizer.step()
+            scheduler.step()
             loss_n.append(float(loss))
+            y_n.append(float(y.mean().detach()))
 
             #if i%(itr_actual-1) == 0:
                 #print("time_"+str(n)+ "iter_"+str(i))
@@ -171,7 +182,7 @@ class BSDEsolver():
                     #print(par_group["lr"])
 
 
-        return loss_n, y
+        return loss_n, y, y_n
 
 class BSDEiter():
     def __init__(self, equation, dim_h):
@@ -181,6 +192,7 @@ class BSDEiter():
 
     def train_whole(self, batch_size, N, path, itr, multiplyer):
         loss_data = []
+        y_trace = []
 
 
         for n in range(N-2,-1,-1):
@@ -196,10 +208,17 @@ class BSDEiter():
                 bsde_solver.model.load_state_dict(torch.load(path+"state_dict_" + str(n+1)))
                 bsde_solver.optimizer.load_state_dict(torch.load(path + "state_dict_opt_" + str(n + 1)))
 
-            loss_n, y = bsde_solver.train(batch_size, N, n, itr, path, multiplyer)
+            loss_n, y, y_n = bsde_solver.train(batch_size, N, n, itr, path, multiplyer)
             loss_data.append(loss_n)
+            y_trace.append({"n": n, "y_mean": y_n})
             torch.save(bsde_solver.model.state_dict(),path+"state_dict_" + str(n))
             torch.save(bsde_solver.optimizer.state_dict(), path + "state_dict_opt_" + str(n))
+
+        # y_trace[k]["y_mean"][i] is the batch mean of Y_{t_n} at iteration i for
+        # the step n recorded there; the last entry (n = 0) is the running Y_0
+        # estimate over training iterations.
+        with open(path + "y_trace.json", "w") as fh:
+            json.dump(y_trace, fh)
 
         return loss_data, y
 
