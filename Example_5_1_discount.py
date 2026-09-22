@@ -76,6 +76,10 @@ def run(beta_lo, beta_hi, out_dir, seed=0, N=50, itr=300, dim_h=50,
     else:
         xi = xi_override
 
+    def law(t):
+        # X_t = x_0 + W_t
+        return x0_value, float(np.sqrt(max(t, 0.0)))
+
     def f(t, x, y, z):
         # g(t, y, z) = sup_beta {-beta y} = max(-beta_lo y, -beta_hi y); no z-term
         return torch.maximum(-beta_lo * y, -beta_hi * y)
@@ -101,7 +105,7 @@ def run(beta_lo, beta_hi, out_dir, seed=0, N=50, itr=300, dim_h=50,
         json.dump(params, h, indent=2)
 
     start = time.time()
-    loss, y = bsde_train(equation, dim_h, batch_size, N, path, itr, multiplier)
+    loss, y = bsde_train(equation, dim_h, batch_size, N, path, itr, multiplier, law)
     mins = (time.time() - start) / 60.0
     Y0 = float(y[0, 0])
     print(f"[5.1] band [{beta_lo:.3f},{beta_hi:.3f}]  Y_0={Y0:+.5f}  ({mins:.1f} min)")
@@ -114,18 +118,18 @@ def run(beta_lo, beta_hi, out_dir, seed=0, N=50, itr=300, dim_h=50,
     summary = {"beta_lo": beta_lo, "beta_hi": beta_hi, "Y0": Y0, "seed": seed}
     if diagnose:
         summary.update(_diagnose(equation, dim_h, path, graph_path, batch_size, N, T,
-                                 upper_barrier, beta_lo, beta_hi, loss))
+                                 upper_barrier, law, beta_lo, beta_hi, loss))
     with open(out_dir + "summary.json", "w") as p:
         json.dump(summary, p, indent=2)
     return summary
 
 
-def bsde_train(equation, dim_h, batch_size, N, path, itr, multiplier):
-    return BSDEiter(equation, dim_h).train_whole(batch_size, N, path, itr, multiplier)
+def bsde_train(equation, dim_h, batch_size, N, path, itr, multiplier, law=None):
+    return BSDEiter(equation, dim_h).train_whole(batch_size, N, path, itr, multiplier, law)
 
 
 def _diagnose(equation, dim_h, path, graph_path, batch_size, N, T,
-              upper_barrier, beta_lo, beta_hi, loss):
+              upper_barrier, law, beta_lo, beta_hi, loss):
     model = Model(equation, dim_h)
     model.eval()
     result = Result(model, equation)
@@ -136,7 +140,7 @@ def _diagnose(equation, dim_h, path, graph_path, batch_size, N, T,
         x = result.gen_x(batch_size, N, W)
         flag = torch.isnan(x).any()
 
-    y, z = result.predict(N, batch_size, x, path)
+    y, z = result.predict(N, batch_size, x, path, law)
 
     t = torch.linspace(0, T, N)
     y_np = y.detach().cpu().numpy()
@@ -166,18 +170,17 @@ def _diagnose(equation, dim_h, path, graph_path, batch_size, N, T,
     frac_asset_overall = float((interior >= 0).mean())
 
     # ---- stopping times histogram
-    tol = 1e-3
     exit_idx = []
     for j in range(batch_size):
         diff = upper_np[j, 0, :-1] - y_np[j, 0, :-1]
-        hits = diff < tol
+        hits = diff <= 0.0
         exit_idx.append(int(np.argmax(hits)) if hits.any() else N)
     exit_times = np.array(exit_idx) / N
     stopped_early = exit_times < (N - 1) / N
 
     plt.figure(figsize=(8, 5))
     if stopped_early.any():
-        plt.hist(exit_times[stopped_early], bins=20, alpha=0.7)
+        plt.hist(exit_times[stopped_early], bins=np.linspace(0.0, 1.0, 26), alpha=0.7)
         plt.axvline(exit_times[stopped_early].mean(), color="red",
                     linestyle="--", lw=1.2,
                     label=f"mean {exit_times[stopped_early].mean():.3f}")

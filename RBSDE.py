@@ -42,7 +42,7 @@ class Model(nn.Module):
 
         self.equation = equation
 
-    def forward(self, N, n, x):
+    def forward(self, N, n, x, law=None):
 
         def normalize(x):
             xmax = x.max(dim=0).values
@@ -64,13 +64,15 @@ class Model(nn.Module):
 
         delta_t = self.equation.T / N
 
-        x_nor = standardize(x)
-        #x_nor = x
-        '''
-        if n!=0:
-            #x_nor = normalize(x)
+        # law(t) -> (mean, sd) of X_t. When supplied the input is standardised
+        # by the analytic law of the forward process, so the network is a
+        # function of x alone. Standardising by batch statistics instead makes
+        # the output depend on which other paths share the batch.
+        if law is not None:
+            mu, sdev = law(delta_t * n)
+            x_nor = (x - mu) / (sdev + 0.0001)
+        else:
             x_nor = standardize(x)
-            '''
 
         inpt = torch.cat((x_nor, torch.ones(x.size()[0], 1, device=device) * delta_t * n), 1)
         yz = phi(inpt)
@@ -120,7 +122,7 @@ class BSDEsolver():
             #x_next = torch.exp(x_next)
         return x, w, x_next
 
-    def train(self, batch_size, N, n, itr, path, multiplyer):
+    def train(self, batch_size, N, n, itr, path, multiplyer, law=None):
         loss_n = []
         y_n = []
         delta_t = self.equation.T / N
@@ -152,13 +154,13 @@ class BSDEsolver():
 
 
 
-            y,z = self.model(N, n, x)
+            y,z = self.model(N, n, x, law)
 
             if n == N-2:
                 y_prev = self.equation.g(x_next).to(device)
             else:
 
-                y_prev, z_prev = mod2(N,n+1,x_next)
+                y_prev, z_prev = mod2(N,n+1,x_next, law)
 
 
             if 0==0:
@@ -190,7 +192,7 @@ class BSDEiter():
         self.dim_h = dim_h
 
 
-    def train_whole(self, batch_size, N, path, itr, multiplyer):
+    def train_whole(self, batch_size, N, path, itr, multiplyer, law=None):
         loss_data = []
         y_trace = []
 
@@ -208,7 +210,7 @@ class BSDEiter():
                 bsde_solver.model.load_state_dict(torch.load(path+"state_dict_" + str(n+1)))
                 bsde_solver.optimizer.load_state_dict(torch.load(path + "state_dict_opt_" + str(n + 1)))
 
-            loss_n, y, y_n = bsde_solver.train(batch_size, N, n, itr, path, multiplyer)
+            loss_n, y, y_n = bsde_solver.train(batch_size, N, n, itr, path, multiplyer, law)
             loss_data.append(loss_n)
             y_trace.append({"n": n, "y_mean": y_n})
             torch.save(bsde_solver.model.state_dict(),path+"state_dict_" + str(n))
@@ -261,7 +263,7 @@ class Result():
         return x
 
 
-    def predict(self,N,batch_size,x, path):
+    def predict(self,N,batch_size,x, path, law=None):
         delta_t = self.equation.T / N
         ys = torch.zeros(batch_size, self.equation.dim_y, N)
         zs = torch.zeros(batch_size, self.equation.dim_y, self.equation.dim_d, N)
@@ -270,7 +272,7 @@ class Result():
 
         for n in range(N-1):
             self.model.load_state_dict(torch.load(path + "state_dict_" + str(n),map_location=torch.device('cpu')))
-            y,z = self.model(N, n, x[:,:,n])
+            y,z = self.model(N, n, x[:,:,n], law)
             if 0==0:
                 #y = torch.maximum(y,self.equation.l(x[:,:,n]))
                 y = torch.minimum(torch.maximum(y, self.equation.lower(delta_t*n, x[:, :, n])), self.equation.upper(delta_t*n, x[:, :, n]))

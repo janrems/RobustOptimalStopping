@@ -66,6 +66,12 @@ def run(gamma_bar, delta_bar, out_dir, S0=1.0, K=1.1, sigma_S=0.2, r=0.05,
     else:
         xi = xi_override
 
+    x0_value = float(np.log(S0))
+
+    def law(t):
+        # X_t = log S_t, Gaussian with drift (r - sigma^2/2)
+        return x0_value + (r - 0.5 * sigma_S ** 2) * t, float(sigma_S * np.sqrt(max(t, 0.0)))
+
     def f(t, x, y, z):
         # g(t, y, z) = (gamma_bar/2)|z|^2 - delta_bar y    (paper §5.4, linear in y)
         z_sq = (z ** 2).sum(dim=-1)
@@ -80,7 +86,6 @@ def run(gamma_bar, delta_bar, out_dir, S0=1.0, K=1.1, sigma_S=0.2, r=0.05,
     def upper_barrier(t, x):
         return -xi(t, x)
 
-    x0_value = float(np.log(S0))
     x_0 = torch.tensor(x0_value, dtype=torch.float32, device=device)
     equation = fbsde(x_0, b, sigma, f, g, lower_barrier, upper_barrier,
                      T, dim_x, dim_y, dim_d)
@@ -93,7 +98,7 @@ def run(gamma_bar, delta_bar, out_dir, S0=1.0, K=1.1, sigma_S=0.2, r=0.05,
         json.dump(params, h, indent=2)
 
     start = time.time()
-    loss, y = BSDEiter(equation, dim_h).train_whole(batch_size, N, path, itr, multiplier)
+    loss, y = BSDEiter(equation, dim_h).train_whole(batch_size, N, path, itr, multiplier, law)
     mins = (time.time() - start) / 60.0
     Y0 = float(y[0, 0])
     intrinsic = max(K - S0, 0.0)
@@ -110,14 +115,14 @@ def run(gamma_bar, delta_bar, out_dir, S0=1.0, K=1.1, sigma_S=0.2, r=0.05,
                "time_value": -Y0 - intrinsic, "seed": seed}
     if diagnose:
         summary.update(_diagnose(equation, dim_h, path, graph_path, batch_size,
-                                 N, T, upper_barrier, K, S0, loss))
+                                 N, T, upper_barrier, law, K, S0, loss))
     with open(out_dir + "summary.json", "w") as p:
         json.dump(summary, p, indent=2)
     return summary
 
 
 def _diagnose(equation, dim_h, path, graph_path, batch_size, N, T,
-              upper_barrier, K, S0, loss):
+              upper_barrier, law, K, S0, loss):
     model = Model(equation, dim_h)
     model.eval()
     result = Result(model, equation)
@@ -128,7 +133,7 @@ def _diagnose(equation, dim_h, path, graph_path, batch_size, N, T,
         x = result.gen_x(batch_size, N, W)
         flag = torch.isnan(x).any()
 
-    y, z = result.predict(N, batch_size, x, path)
+    y, z = result.predict(N, batch_size, x, path, law)
 
     t = torch.linspace(0, T, N)
     y_np = y.detach().cpu().numpy()
@@ -156,18 +161,17 @@ def _diagnose(equation, dim_h, path, graph_path, batch_size, N, T,
     max_viol = float(np.maximum(y_np[:, 0, :] - upper_np[:, 0, :], 0.0).max())
 
     # ---- stopping times histogram
-    tol = 1e-3
     exit_idx = []
     for j in range(batch_size):
         diff = upper_np[j, 0, :-1] - y_np[j, 0, :-1]
-        hits = diff < tol
+        hits = diff <= 0.0
         exit_idx.append(int(np.argmax(hits)) if hits.any() else N)
     exit_times = np.array(exit_idx) / N
     stopped_early = exit_times < (N - 1) / N
 
     plt.figure(figsize=(8, 5))
     if stopped_early.any():
-        plt.hist(exit_times[stopped_early], bins=20, alpha=0.7)
+        plt.hist(exit_times[stopped_early], bins=np.linspace(0.0, 1.0, 26), alpha=0.7)
         plt.axvline(exit_times[stopped_early].mean(), color="red",
                     linestyle="--", lw=1.2,
                     label=f"mean {exit_times[stopped_early].mean():.3f}")
