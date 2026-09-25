@@ -1,14 +1,22 @@
-"""Example_AmericanPut.py
+"""entropic_put.py
 
-Pure American put under Black-Scholes (Case 1, no ambiguity).
+Paper §5.4 — geometric American put under entropic-discount ambiguity.
 
 Forward (log-price):  dX_t = (r - sigma^2/2) dt + sigma dW_t,  X_0 = log S_0.
 Payoff:               xi_t = (K - S_t)^+ = (K - e^{X_t})^+.
-Driver:               g(t, y, z) = -r * y    (linear, no sup, no z-term).
 
-This is the classical American put reflected BSDE: upper-reflected, no model
-ambiguity, no discount ambiguity. Serves as the baseline before the ambiguous
-cases §5.1 and §5.4.
+Since Y <= -xi <= 0 everywhere, §5.4's box driver reduces (everywhere) to the
+liability-region form, linear in y:
+
+    g(t, y, z) = -delta_bar * y + (gamma_bar / 2) |z|^2.
+
+This is the paper-faithful driver: gamma_beta = 0 (no y^2 penalty),
+beta_bar = delta_bar (worst-case discount), gamma_alpha = gamma_bar (entropic
+model-ambiguity radius). At gamma_bar = 0 it collapses to the classical
+American put at rate delta_bar.
+
+Trains the backward scheme, then reports the conservative price -Y_0, the
+time value, stopping behaviour and obstacle adherence.
 """
 
 import matplotlib
@@ -22,37 +30,17 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from RBSDE import BSDEiter, Model, Result, fbsde
+from rbsde import BSDEiter, Model, Result, fbsde
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 LOWER_SENTINEL = -1e6
 
 
-def american_put_binomial(S0, K, sigma, r, T, N=2000):
-    """Cox-Ross-Rubinstein American put price; reference benchmark."""
-    dt = T / N
-    u = float(np.exp(sigma * np.sqrt(dt)))
-    d = 1.0 / u
-    p = (np.exp(r * dt) - d) / (u - d)
-    disc = np.exp(-r * dt)
-    # asset prices at maturity
-    j = np.arange(N + 1)
-    S = S0 * (u ** (N - j)) * (d ** j)
-    V = np.maximum(K - S, 0.0)
-    for step in range(N - 1, -1, -1):
-        j = np.arange(step + 1)
-        S = S0 * (u ** (step - j)) * (d ** j)
-        cont = disc * (p * V[:step + 1] + (1.0 - p) * V[1:step + 2])
-        exercise = np.maximum(K - S, 0.0)
-        V = np.maximum(cont, exercise)
-    return float(V[0])
-
-
-def run(out_dir, S0=1.0, K=1.1, sigma_S=0.2, r=0.05,
+def run(gamma_bar, delta_bar, out_dir, S0=1.0, K=1.1, sigma_S=0.2, r=0.05,
         seed=0, N=50, itr=300, dim_h=50, batch_size=2 ** 10, multiplier=10,
         T=1.0, diagnose=True, xi_override=None):
-    """Train the pure American put; return summary dict.
+    """Train §5.4 for entropic radius gamma_bar and worst-case discount delta_bar.
 
     xi_override(t, x): optional obstacle replacing the default put payoff
     (used by the property checks to feed shifted / alternate-strike obstacles).
@@ -85,8 +73,9 @@ def run(out_dir, S0=1.0, K=1.1, sigma_S=0.2, r=0.05,
         return x0_value + (r - 0.5 * sigma_S ** 2) * t, float(sigma_S * np.sqrt(max(t, 0.0)))
 
     def f(t, x, y, z):
-        # g(t, y, z) = -r y    (BS, no ambiguity, linear in y)
-        return -r * y
+        # g(t, y, z) = (gamma_bar/2)|z|^2 - delta_bar y    (paper §5.4, linear in y)
+        z_sq = (z ** 2).sum(dim=-1)
+        return 0.5 * gamma_bar * z_sq - delta_bar * y
 
     def g(x):
         return -xi(T, x)
@@ -104,7 +93,7 @@ def run(out_dir, S0=1.0, K=1.1, sigma_S=0.2, r=0.05,
     params = dict(dim_x=dim_x, dim_y=dim_y, dim_d=dim_d, dim_h=dim_h, N=N,
                   itr=itr, batch_size=batch_size, multiplier=multiplier,
                   x0_value=x0_value, T=T, S0=S0, K=K, sigma_S=sigma_S, r=r,
-                  seed=seed)
+                  gamma_bar=gamma_bar, delta_bar=delta_bar, seed=seed)
     with open(os.path.join(path, "params.json"), "w") as h:
         json.dump(params, h, indent=2)
 
@@ -113,19 +102,17 @@ def run(out_dir, S0=1.0, K=1.1, sigma_S=0.2, r=0.05,
     mins = (time.time() - start) / 60.0
     Y0 = float(y[0, 0])
     intrinsic = max(K - S0, 0.0)
-    ref_price = american_put_binomial(S0, K, sigma_S, r, T, N=2000)
-    print(f"[BS] r={r:.3f} sigma={sigma_S:.3f}  -Y_0={-Y0:.5f}  "
-          f"intrinsic={intrinsic:.5f}  binomial_ref={ref_price:.5f}  "
-          f"(gap {(-Y0) - ref_price:+.5f})  ({mins:.1f} min)")
+    print(f"[5.4] gamma_bar={gamma_bar:.3f} delta_bar={delta_bar:.3f}  "
+          f"-Y_0={-Y0:.5f}  intrinsic={intrinsic:.5f}  ({mins:.1f} min)")
 
     with open(path + "loss.json", "w") as p:
         json.dump(loss, p, indent=2)
     with open(path + "Y0.json", "w") as p:
         json.dump({"Y0": Y0}, p, indent=2)
 
-    summary = {"Y0": Y0, "put_price": -Y0, "intrinsic": intrinsic,
-               "time_value": -Y0 - intrinsic, "binomial_ref": ref_price,
-               "ref_gap": (-Y0) - ref_price, "seed": seed}
+    summary = {"gamma_bar": gamma_bar, "delta_bar": delta_bar, "Y0": Y0,
+               "put_price": -Y0, "intrinsic": intrinsic,
+               "time_value": -Y0 - intrinsic, "seed": seed}
     if diagnose:
         summary.update(_diagnose(equation, dim_h, path, graph_path, batch_size,
                                  N, T, upper_barrier, law, K, S0, loss))
@@ -170,6 +157,9 @@ def _diagnose(equation, dim_h, path, graph_path, batch_size, N, T,
     plt.savefig(graph_path + "Y_trajectories.png")
     plt.close()
 
+    # silent QC: max upper-obstacle violation (printed only)
+    max_viol = float(np.maximum(y_np[:, 0, :] - upper_np[:, 0, :], 0.0).max())
+
     # ---- stopping times histogram
     exit_idx = []
     for j in range(batch_size):
@@ -201,7 +191,7 @@ def _diagnose(equation, dim_h, path, graph_path, batch_size, N, T,
         tail = loss[0][max(0, int(0.9 * len(loss[0]))):]
         if tail:
             plt.axhline(float(np.mean(tail)), color="red", linestyle="--",
-                        lw=1.0, alpha=0.6, label=f"final 10% mean")
+                        lw=1.0, alpha=0.6, label="final 10% mean")
             plt.legend()
     plt.yscale("log")
     plt.xlabel("iteration"); plt.ylabel("loss")
@@ -212,16 +202,16 @@ def _diagnose(equation, dim_h, path, graph_path, batch_size, N, T,
     plt.close()
 
     mean_tau = float(exit_times[stopped_early].mean()) if stopped_early.any() else None
+    print(f"      max obstacle violation: {max_viol:.2e}")
     print(f"      fraction stopping early: {stopped_early.mean():.3f}")
-    if mean_tau is not None:
-        print(f"      mean tau*: {mean_tau:.4f}")
 
     return {
+        "max_obstacle_violation": max_viol,
         "frac_stopping_early": float(stopped_early.mean()),
         "mean_tau_star": mean_tau,
     }
 
 
 if __name__ == "__main__":
-    # baseline: standard American put, no ambiguity
-    run(out_dir="Example_AmericanPut/")
+    # default: entropic radius 5.0, worst-case discount = risk-free rate
+    run(gamma_bar=5.0, delta_bar=0.05, out_dir="Example_5_4_put/")

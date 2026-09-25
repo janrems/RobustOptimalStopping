@@ -1,30 +1,14 @@
-"""Example_5_1_discount.py
+"""american_put.py
 
-Paper §5.1 — bounded discount-rate ambiguity.
+Pure American put under Black-Scholes (Case 1, no ambiguity).
 
-Risk measure: the discount rate is ambiguous in a band [beta_lo, beta_hi];
-the probability measure is fixed. The reflected-BSDE driver is
+Forward (log-price):  dX_t = (r - sigma^2/2) dt + sigma dW_t,  X_0 = log S_0.
+Payoff:               xi_t = (K - S_t)^+ = (K - e^{X_t})^+.
+Driver:               g(t, y, z) = -r * y    (linear, no sup, no z-term).
 
-    g(t, y, z) = sup_{beta in [beta_lo, beta_hi]} { -beta y }
-               = max(-beta_lo * y, -beta_hi * y).
-
-No z-term: pure discount ambiguity. Both band endpoints act only if Y changes
-sign, so we use a BOUNDED SIGN-CHANGING collar obstacle
-
-    xi_t = Phi_c(X_t) = c * tanh(X_t / c),    dX_t = dW_t,
-
-with c = 1. The collar is bounded (|xi| <= c), which the convergence theory
-requires, while still sign-changing. Then beta_hi discounts the liability side
-(y < 0) and beta_lo the asset side (y >= 0); that asymmetry is the
-cash-subadditivity §5.1 is about. A nonnegative payoff would pin Y <= 0 and
-collapse the band to beta_hi (see §5.4 / the put).
-
-Upper-reflected BSDE:
-    Y_t = -xi_T + int_t^T g(s, Y_s, Z_s) ds - int_t^T Z_s dW_s - (K_T - K_t),
-    Y_t <= -xi_t,    tau* = inf{ s >= t : Y_s = -xi_s }.
-
-Trains the backward scheme, then reports Y_0, stopping times, and the
-asset/liability split that shows both band endpoints are active.
+This is the classical American put reflected BSDE: upper-reflected, no model
+ambiguity, no discount ambiguity. Serves as the baseline before the ambiguous
+cases §5.1 and §5.4.
 """
 
 import matplotlib
@@ -38,21 +22,40 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
-from RBSDE import BSDEiter, Model, Result, fbsde
+from rbsde import BSDEiter, Model, Result, fbsde
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 LOWER_SENTINEL = -1e6
 
 
-def run(beta_lo, beta_hi, out_dir, seed=0, N=50, itr=300, dim_h=50,
-        batch_size=2 ** 10, multiplier=10, T=1.0, c=1.0, x0_value=0.0,
-        diagnose=True, xi_override=None):
-    """Train §5.1 for a discount band [beta_lo, beta_hi]; return summary dict.
+def american_put_binomial(S0, K, sigma, r, T, N=2000):
+    """Cox-Ross-Rubinstein American put price; reference benchmark."""
+    dt = T / N
+    u = float(np.exp(sigma * np.sqrt(dt)))
+    d = 1.0 / u
+    p = (np.exp(r * dt) - d) / (u - d)
+    disc = np.exp(-r * dt)
+    # asset prices at maturity
+    j = np.arange(N + 1)
+    S = S0 * (u ** (N - j)) * (d ** j)
+    V = np.maximum(K - S, 0.0)
+    for step in range(N - 1, -1, -1):
+        j = np.arange(step + 1)
+        S = S0 * (u ** (step - j)) * (d ** j)
+        cont = disc * (p * V[:step + 1] + (1.0 - p) * V[1:step + 2])
+        exercise = np.maximum(K - S, 0.0)
+        V = np.maximum(cont, exercise)
+    return float(V[0])
 
-    c: collar level of the default obstacle xi_t = c * tanh(X_t / c).
-    xi_override(t, x): optional obstacle replacing the default collar
-    (used by the property checks to feed shifted / alternate obstacles).
+
+def run(out_dir, S0=1.0, K=1.1, sigma_S=0.2, r=0.05,
+        seed=0, N=50, itr=300, dim_h=50, batch_size=2 ** 10, multiplier=10,
+        T=1.0, diagnose=True, xi_override=None):
+    """Train the pure American put; return summary dict.
+
+    xi_override(t, x): optional obstacle replacing the default put payoff
+    (used by the property checks to feed shifted / alternate-strike obstacles).
     """
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -64,25 +67,26 @@ def run(beta_lo, beta_hi, out_dir, seed=0, N=50, itr=300, dim_h=50,
     os.makedirs(graph_path, exist_ok=True)
 
     def b(t, x):
-        return torch.zeros_like(x)
+        return torch.full_like(x, r - 0.5 * sigma_S ** 2)
 
     def sigma(t, x):
-        return torch.ones(x.size(0), dim_x, dim_x, device=x.device)
+        return torch.full((x.size(0), dim_x, dim_x), sigma_S, device=x.device)
 
     if xi_override is None:
         def xi(t, x):
-            # bounded sign-changing collar obstacle xi_t = c * tanh(X_t / c)
-            return c * torch.tanh(x / c)
+            return torch.clamp(K - torch.exp(x), min=0.0)
     else:
         xi = xi_override
 
+    x0_value = float(np.log(S0))
+
     def law(t):
-        # X_t = x_0 + W_t
-        return x0_value, float(np.sqrt(max(t, 0.0)))
+        # X_t = log S_t, Gaussian with drift (r - sigma^2/2)
+        return x0_value + (r - 0.5 * sigma_S ** 2) * t, float(sigma_S * np.sqrt(max(t, 0.0)))
 
     def f(t, x, y, z):
-        # g(t, y, z) = sup_beta {-beta y} = max(-beta_lo y, -beta_hi y); no z-term
-        return torch.maximum(-beta_lo * y, -beta_hi * y)
+        # g(t, y, z) = -r y    (BS, no ambiguity, linear in y)
+        return -r * y
 
     def g(x):
         return -xi(T, x)
@@ -99,37 +103,39 @@ def run(beta_lo, beta_hi, out_dir, seed=0, N=50, itr=300, dim_h=50,
 
     params = dict(dim_x=dim_x, dim_y=dim_y, dim_d=dim_d, dim_h=dim_h, N=N,
                   itr=itr, batch_size=batch_size, multiplier=multiplier,
-                  x0_value=x0_value, T=T, c=c, beta_lo=beta_lo, beta_hi=beta_hi,
+                  x0_value=x0_value, T=T, S0=S0, K=K, sigma_S=sigma_S, r=r,
                   seed=seed)
     with open(os.path.join(path, "params.json"), "w") as h:
         json.dump(params, h, indent=2)
 
     start = time.time()
-    loss, y = bsde_train(equation, dim_h, batch_size, N, path, itr, multiplier, law)
+    loss, y = BSDEiter(equation, dim_h).train_whole(batch_size, N, path, itr, multiplier, law)
     mins = (time.time() - start) / 60.0
     Y0 = float(y[0, 0])
-    print(f"[5.1] band [{beta_lo:.3f},{beta_hi:.3f}]  Y_0={Y0:+.5f}  ({mins:.1f} min)")
+    intrinsic = max(K - S0, 0.0)
+    ref_price = american_put_binomial(S0, K, sigma_S, r, T, N=2000)
+    print(f"[BS] r={r:.3f} sigma={sigma_S:.3f}  -Y_0={-Y0:.5f}  "
+          f"intrinsic={intrinsic:.5f}  binomial_ref={ref_price:.5f}  "
+          f"(gap {(-Y0) - ref_price:+.5f})  ({mins:.1f} min)")
 
     with open(path + "loss.json", "w") as p:
         json.dump(loss, p, indent=2)
     with open(path + "Y0.json", "w") as p:
         json.dump({"Y0": Y0}, p, indent=2)
 
-    summary = {"beta_lo": beta_lo, "beta_hi": beta_hi, "Y0": Y0, "seed": seed}
+    summary = {"Y0": Y0, "put_price": -Y0, "intrinsic": intrinsic,
+               "time_value": -Y0 - intrinsic, "binomial_ref": ref_price,
+               "ref_gap": (-Y0) - ref_price, "seed": seed}
     if diagnose:
-        summary.update(_diagnose(equation, dim_h, path, graph_path, batch_size, N, T,
-                                 upper_barrier, law, beta_lo, beta_hi, loss))
+        summary.update(_diagnose(equation, dim_h, path, graph_path, batch_size,
+                                 N, T, upper_barrier, law, K, S0, loss))
     with open(out_dir + "summary.json", "w") as p:
         json.dump(summary, p, indent=2)
     return summary
 
 
-def bsde_train(equation, dim_h, batch_size, N, path, itr, multiplier, law=None):
-    return BSDEiter(equation, dim_h).train_whole(batch_size, N, path, itr, multiplier, law)
-
-
 def _diagnose(equation, dim_h, path, graph_path, batch_size, N, T,
-              upper_barrier, law, beta_lo, beta_hi, loss):
+              upper_barrier, law, K, S0, loss):
     model = Model(equation, dim_h)
     model.eval()
     result = Result(model, equation)
@@ -153,21 +159,16 @@ def _diagnose(equation, dim_h, path, graph_path, batch_size, N, T,
     t_z = t[:-1]
     for j in sample_js:
         axes[0].plot(t, y_np[j, 0, :], label=f"$Y$ (sample {j})")
-        axes[0].plot(t, upper_np[j, 0, :], "--", alpha=0.6,
+        axes[0].plot(t, upper_np[j, 0, :], "--", alpha=0.5,
                      label=rf"$-\xi$ (sample {j})")
         axes[1].plot(t_z, z_np[j, 0, 0, :-1], label=f"$Z$ (sample {j})")
-    axes[0].axhline(0.0, color="k", lw=0.8, alpha=0.6)
-    axes[0].set_title(r"$Y_t$ and upper obstacle $-\xi_t = -c\,\tanh(X_t/c)$")
-    axes[0].set_xlabel("t"); axes[0].grid(True); axes[0].legend(fontsize=8)
+    axes[0].set_title(r"$Y_t$ and upper obstacle $-\xi_t$")
+    axes[0].set_xlabel("t"); axes[0].grid(True); axes[0].legend(fontsize=7)
     axes[1].set_title(r"Control process $Z_t$")
     axes[1].set_xlabel("t"); axes[1].grid(True); axes[1].legend(fontsize=8)
     plt.tight_layout()
     plt.savefig(graph_path + "Y_trajectories.png")
     plt.close()
-
-    # both branches active iff Y visits both signs at interior times
-    interior = y_np[:, 0, 1:-1]
-    frac_asset_overall = float((interior >= 0).mean())
 
     # ---- stopping times histogram
     exit_idx = []
@@ -200,7 +201,7 @@ def _diagnose(equation, dim_h, path, graph_path, batch_size, N, T,
         tail = loss[0][max(0, int(0.9 * len(loss[0]))):]
         if tail:
             plt.axhline(float(np.mean(tail)), color="red", linestyle="--",
-                        lw=1.0, alpha=0.6, label="final 10% mean")
+                        lw=1.0, alpha=0.6, label=f"final 10% mean")
             plt.legend()
     plt.yscale("log")
     plt.xlabel("iteration"); plt.ylabel("loss")
@@ -211,18 +212,16 @@ def _diagnose(equation, dim_h, path, graph_path, batch_size, N, T,
     plt.close()
 
     mean_tau = float(exit_times[stopped_early].mean()) if stopped_early.any() else None
-    print(f"      asset-region fraction (interior): {frac_asset_overall:.3f}")
-    print(f"      both branches active: {0.0 < frac_asset_overall < 1.0}")
     print(f"      fraction stopping early: {stopped_early.mean():.3f}")
+    if mean_tau is not None:
+        print(f"      mean tau*: {mean_tau:.4f}")
 
     return {
-        "frac_asset_interior": frac_asset_overall,
-        "both_branches_active": bool(0.0 < frac_asset_overall < 1.0),
         "frac_stopping_early": float(stopped_early.mean()),
         "mean_tau_star": mean_tau,
     }
 
 
 if __name__ == "__main__":
-    # default illustrative band [0, 0.10]
-    run(beta_lo=0.0, beta_hi=0.10, out_dir="Example_5_1_discount/")
+    # baseline: standard American put, no ambiguity
+    run(out_dir="Example_AmericanPut/")

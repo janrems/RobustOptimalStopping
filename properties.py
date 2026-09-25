@@ -1,9 +1,9 @@
-"""Example_properties.py
+"""properties.py
 
 Numerical check of Proposition 3.2 (Properties of phi) for all three examples:
-  - Example_AmericanPut  (Case 1, BS, driver g(y) = -r y, affine)
-  - Example_5_1_discount (Case 2, sup_beta {-beta y}, convex in y, not affine)
-  - Example_5_4_put      (Case 3, -delta_bar y + (gamma_bar/2)|z|^2, not affine)
+  - american_put         (Case 1, BS, driver g(y) = -r y, affine)
+  - discount_ambiguity   (Case 2, sup_beta {-beta y}, convex in y, not affine)
+  - entropic_put         (Case 3, -delta_bar y + (gamma_bar/2)|z|^2, not affine)
 
 Properties checked (Prop 3.2):
   (a) decreasing monotonicity     phi(xi+m) <= phi(xi)            GATE
@@ -22,9 +22,9 @@ import os
 
 import torch
 
-from Example_AmericanPut import run as run_BS
-from Example_5_1_discount import run as run_51
-from Example_5_4_put import run as run_54
+from american_put import run as run_BS
+from discount_ambiguity import run as run_51
+from entropic_put import run as run_54
 
 OUT = "Example_properties/"
 M_SHIFT = 0.2          # constant obstacle shift for monotonicity / cash-subadditivity

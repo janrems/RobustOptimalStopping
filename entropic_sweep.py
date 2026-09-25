@@ -1,8 +1,8 @@
-"""Example_5_4_sweep.py
+"""entropic_sweep.py
 
 §5.4 ambiguity sweep: vary the entropic radius gamma_bar (worst-case discount
 delta_bar fixed at the risk-free rate) and record the conservative put price,
-time value and stopping behaviour. Reuses Example_5_4_put.run.
+time value and stopping behaviour. Reuses entropic_put.run.
 
 gamma_bar = 0 is the classical American put at rate delta_bar — the anchor as
 ambiguity vanishes. Several replicates per grid point, paired seeds.
@@ -17,7 +17,7 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 
-from Example_5_4_put import run
+from entropic_put import run
 
 OUT = "Example_5_4_sweep/"
 GAMMA_GRID = [0.0, 0.1, 0.5, 1.0, 2.0]
