@@ -35,15 +35,3 @@ uv run python properties.py
 
 Each writes trained weights, a summary and diagnostic figures under its own
 output directory. Those directories are not tracked.
-
-## Notes
-
-The network input is standardised by the analytic law of the forward process,
-supplied per example as `law(t) -> (mean, sd)`. Standardising by batch
-statistics instead makes the trained object depend on which paths share an
-evaluation batch, which leaves `Y_0` intact but makes quantities read at `t > 0`
-irreproducible.
-
-Contact with the obstacle is detected exactly rather than within a tolerance:
-the projection onto the obstacle is part of the scheme, so where it binds the
-gap is zero by construction.
